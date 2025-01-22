@@ -3,7 +3,7 @@
 WORK_DIR=/app
 # 指定版本变量
 DASHBOARD_VERSION="v1.6.0"
-AGENT_VERSION="v1.60.0"
+AGENT_VERSION="v1.6.0"
 
 setup_ssl() {
     openssl genrsa -out $WORK_DIR/nezha.key 2048
