@@ -1,62 +1,9 @@
 #!/bin/bash
 
 WORK_DIR=/app
-REPOS=(
-    "nezhahq/nezha:dashboard-linux-amd64.zip:dashboard"
-    "nezhahq/agent:nezha-agent_linux_amd64.zip:agent"
-)
-
-get_local_version() {
-    local component="$1"
-    local version=""
-    
-    case "$component" in
-        dashboard)
-            version=$(./dashboard-linux-amd64 -v 2>/dev/null)
-            ;;
-        agent)
-            version=$(./nezha-agent -v 2>/dev/null | awk '{print $3}')
-            ;;
-    esac
-    
-    echo "$version" | grep -oE '[0-9.]+'
-}
-
-get_remote_version() {
-    local repo="$1"
-    local version=$(curl -sL "https://api.github.com/repos/$repo/releases/latest" | grep '"tag_name":' | sed -E 's/.*"v?([0-9.]+)".*/\1/')
-    
-    echo "$version"
-}
-
-download_and_update_component() {
-    local repo="$1" filename="$2" component="$3"
-    
-    local local_version=$(get_local_version "$component")
-    local remote_version=$(get_remote_version "$repo")
-    
-    if [ -z "$local_version" ]; then
-        wget -q "https://github.com/$repo/releases/latest/download/$filename" -O "$filename"
-        if [ $? -eq 0 ]; then
-            unzip -qo "$filename" -d "$WORK_DIR" && rm "$filename"
-            return 0
-        fi
-    fi
-    
-    if [ -z "$remote_version" ]; then
-        return 1
-    fi
-    
-    if [ "$local_version" != "$remote_version" ]; then
-        wget -q "https://github.com/$repo/releases/latest/download/$filename" -O "$filename"
-        if [ $? -eq 0 ]; then
-            unzip -qo "$filename" -d "$WORK_DIR" && rm "$filename"
-            return 0
-        fi
-    fi
-    
-    return 1
-}
+# 指定版本变量
+DASHBOARD_VERSION="v1.6.0"
+AGENT_VERSION="v1.60.0"
 
 setup_ssl() {
     openssl genrsa -out $WORK_DIR/nezha.key 2048
@@ -131,11 +78,25 @@ check_env_variables() {
     [ -z "$NZ_agentsecretkey" ] && { echo "Error: NZ_agentsecretkey not set"; exit 1; }
 }
 
+download_components() {
+    # 下载指定版本的 Dashboard
+    wget -q "https://github.com/nezhahq/nezha/releases/download/${DASHBOARD_VERSION}/dashboard-linux-amd64.zip" -O "dashboard-linux-amd64.zip"
+    if [ $? -eq 0 ]; then
+        unzip -qo "dashboard-linux-amd64.zip" -d "$WORK_DIR" && rm "dashboard-linux-amd64.zip"
+    fi
+
+    # 下载指定版本的 Agent
+    wget -q "https://github.com/nezhahq/agent/releases/download/${AGENT_VERSION}/nezha-agent_linux_amd64.zip" -O "nezha-agent_linux_amd64.zip"
+    if [ $? -eq 0 ]; then
+        unzip -qo "nezha-agent_linux_amd64.zip" -d "$WORK_DIR" && rm "nezha-agent_linux_amd64.zip"
+    fi
+}
+
 start_services() {
     nohup nginx >/dev/null 2>&1 &
     nohup ./cloudflared-linux-amd64 tunnel --protocol http2 run --token "$ARGO_AUTH" >/dev/null 2>&1 &
     nohup ./dashboard-linux-amd64 >/dev/null 2>&1 &
-    NZ_SERVER=$NZ_DOMAIN:443 NZ_TLS=true NZ_CLIENT_SECRET=$NZ_agentsecretkey nohup ./nezha-agent >/dev/null 2>&1 &
+    NZ_SERVER=$NZ_DOMAIN:443 NZ_TLS=true NZ_CLIENT_SECRET=$NZ_agentsecretkey disable_auto_update=true nohup ./nezha-agent >/dev/null 2>&1 &
 }
 
 stop_services() {
@@ -150,10 +111,7 @@ main() {
     setup_ssl
     create_nginx_config
 
-    for repo_info in "${REPOS[@]}"; do
-        IFS=: read -r repo filename component <<< "$repo_info"
-        download_and_update_component "$repo" "$filename" "$component"
-    done
+    download_components
 
     [ ! -f "cloudflared-linux-amd64" ] && wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
 
@@ -180,17 +138,4 @@ while true; do
     fi
 
     sleep 1800
-
-    updated=0
-    for repo_info in "${REPOS[@]}"; do
-        IFS=: read -r repo filename component <<< "$repo_info"
-        if download_and_update_component "$repo" "$filename" "$component"; then
-            updated=1
-        fi
-    done
-
-    if [ $updated -eq 1 ]; then
-        stop_services
-        main
-    fi
 done
